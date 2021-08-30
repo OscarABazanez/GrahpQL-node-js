@@ -1,22 +1,11 @@
 const graphql = require('graphql')
 const {GraphQLObjectType, GraphQLID, GraphQLInt, GraphQLBoolean, GraphQLString, GraphQLList, GraphQLSchema} = graphql
-
-var course = [
-    {id:'1',name:'Padtrones de Java', lenguaje:'Java', date:'2022', profesorID:'2'},
-    {id:'2',name:'Padtrones de Python', lenguaje:'Python', date:'2023', profesorID:'1'},
-    {id:'3',name:'Padtrones de PHP', lenguaje:'PHP', date:'2024', profesorID:'1'},
-    {id:'4',name:'Padtrones de JS', lenguaje:'JS', date:'2024', profesorID:'3'},
-]
-var profesor = [
-    {id:'1',name:'Oscar', age:30, activo:true, date:'2022'},
-    {id:'2',name:'Pedro', age:12, activo:false, date:'2023'},
-    {id:'3',name:'Alfredo', age:30, activo:true, date:'2025'},
-]
-var user = [
-    {id:'1',name:'Oscar', email:'a@gmail.com', password:"1234", activo:true, date:'2022'},
-    {id:'2',name:'Pedro', email:'s@gmail.com', password:"64554", activo:false, date:'2011'},
-    {id:'3',name:'Alejandra', email:'d@gmail.com', password:"1213234", activo:true, date:'2122'},
-]
+const Course = require('../models/course')
+const Professor = require('../models/professor')
+const User = require('../models/user')
+const bcrypt = require('bcrypt')
+const auth = require('../utils/auth')
+const res = require('express/lib/response')
 
 const CourseType = new GraphQLObjectType({
     name: 'Course',
@@ -28,7 +17,7 @@ const CourseType = new GraphQLObjectType({
         profesor: {
             type: ProfesorType,
             resolve(parent, args){
-                return profesor.find(profesor => profesor.id === parent.profesorID)
+                return Professor.findById(parent.professorId)
             }
         }
     })
@@ -40,12 +29,12 @@ const ProfesorType = new GraphQLObjectType({
         id: {type: GraphQLID},
         name: {type: GraphQLString},
         age: {type: GraphQLInt},
-        activo: {type: GraphQLBoolean},
+        active: {type: GraphQLBoolean},
         date: {type: GraphQLString},
         course: {
             type: new GraphQLList(CourseType),
             resolve(parent, args){
-                return course.filter(course => course.profesorID === parent.id)
+                return Course.find({professorId: parent.id})
             }
         }
     })
@@ -58,10 +47,21 @@ const UserType = new GraphQLObjectType({
         name: {type: GraphQLString},
         email: {type: GraphQLString},
         password: {type: GraphQLString},
-        activo: {type: GraphQLBoolean},
+        active: {type: GraphQLBoolean},
         date: {type: GraphQLString}
     })
 })
+
+
+const MessageType = new GraphQLObjectType({
+    name: 'Message',
+    fields: ()=>({
+        message: {type: GraphQLString},
+        token: {type: GraphQLString},
+        error: {type: GraphQLString}
+    })
+})
+
 
 const RootQuery = new GraphQLObjectType({
     name: 'RootQueryType',
@@ -72,14 +72,17 @@ const RootQuery = new GraphQLObjectType({
                 id: {type: GraphQLString}
             },
             resolve(parent, args, context){
-
-                return course.find(curso=> curso.id === args.id)
+                if(!context.user.auth){
+                    throw new Error('Unauthenticated...')
+                }
+                return Course.findById(args.id)
             }
         },
         courses:{
             type: new GraphQLList(CourseType),
             resolve(parent,args){
-                return course
+                // return course
+                return Course.find()
             }
         },
         profesor: {
@@ -88,14 +91,16 @@ const RootQuery = new GraphQLObjectType({
                 name: {type: GraphQLString}
             },
             resolve(parent, args, context){
-
-                return profesor.find(profe=> profe.name === args.name)
+                if(!context.user.auth){
+                    throw new Error('Unauthenticated...')
+                }
+                return Professor.findOne({name: args.name})
             }
         },
         profesors:{
             type: new GraphQLList(ProfesorType),
             resolve(parent,args){
-                return profesor
+                return Professor.find()
             }
         },
         user: {
@@ -104,8 +109,10 @@ const RootQuery = new GraphQLObjectType({
                 email: {type: GraphQLString}
             },
             resolve(parent, args, context){
-
-                return user.find(user=> user.email === args.email)
+                if(!context.user.auth){
+                    throw new Error('Unauthenticated...')
+                }
+                return User.findById(args.id)
             }
         },
         users:{
@@ -117,7 +124,156 @@ const RootQuery = new GraphQLObjectType({
     }
 })
 
+const Mutation = new GraphQLObjectType({
+    name: 'Mutation',
+    fields: {
+        addCourse: {
+            type: CourseType,
+            args: {
+                name: {type: GraphQLString},
+                lenguaje: {type: GraphQLString},
+                date: {type: GraphQLString},
+                professorId: {type: GraphQLID}
+            },
+            resolve(parent,args, context){
+                if(!context.user.auth){
+                    throw new Error('Unauthenticated...')
+                }
+                const { name, lenguaje, date, professorId} = args
+                let course = new Course({
+                    name,
+                    lenguaje,
+                    date,
+                    professorId
+                })
+                return course.save()
+            }
+        },
+        updateCourse: {
+            type: CourseType,
+            args: {
+                id:{type: GraphQLID},
+                name: {type: GraphQLString},
+                lenguaje: {type: GraphQLString},
+                date: {type: GraphQLString},
+                professorId: {type: GraphQLID}
+            },
+            resolve(parent,args){
+                const { id, name, date, lenguaje, professorId} = args
+                return Course.findByIdAndUpdate(
+                    id, {
+                        name,
+                        lenguaje,
+                        date,
+                        professorId
+                    },{ new: true }
+                )
+            }
+        },
+        deleteCourse: {
+            type: CourseType,
+            args: {
+                id:{type: GraphQLID}
+            },
+            resolve(parent,args){
+                const { id } = args
+                return Course.findByIdAndDelete(id)
+            }
+        },
+        deleteAllCourses:{
+            type: CourseType,
+            resolve(parent, args){
+                return Course.deleteMany({})
+            }
+        },
+        addProfesor: {
+            type: ProfesorType,
+            args: {
+                name: {type: GraphQLString},
+                age: {type: GraphQLInt},
+                active: {type: GraphQLBoolean},
+                date: {type: GraphQLString}
+            },
+            resolve(parent,args){
+                const { name, age, active, date} = args
+                let professor = new Professor({
+                    name,
+                    age,
+                    active,
+                    date
+                })
+                return professor.save()
+            }
+        },
+        updateProfesor: {
+            type: ProfesorType,
+            args: {
+                id: {type: GraphQLID},
+                name: {type: GraphQLString},
+                age: {type: GraphQLInt},
+                date: {type: GraphQLString}
+            },
+            resolve(parent,args){
+                const { id, name, age, date} = args
+                return Professor.findByIdAndUpdate(id,{
+                    name, age, date
+                },{ new:true })
+            }
+        },
+        deleteProfesor: {
+            type: ProfesorType,
+            args: {
+                id: {type: GraphQLID},
+            },
+            resolve(parent,args){
+                const { id } = args
+                return Professor.findByIdAndDelete(id)
+            }
+        },
+        addUser: {
+            type: MessageType,
+            args:{
+                name: {type: GraphQLString},
+                email: {type: GraphQLString},
+                password: {type: GraphQLString},
+                date: {type: GraphQLString}
+            },
+            async resolve(parent, args){
+                const { name, email, password, date } = args
+                let user = await User.findOne({email})
+                if(user) return {error: 'Usuario ya existe'}
+                const salt = await bcrypt.genSalt(10)
+                const passwordhas = await bcrypt.hash(password, salt)
+                user = new User({
+                    name,
+                    email,
+                    password:passwordhas,
+                    date
+                })
+                user.save()
+                return { message: 'Usuario registrado correctamente'}
+            }
+        },
+        login: {
+            type: MessageType,
+            args: {
+                email: {type: GraphQLString},
+                password: {type: GraphQLString},
+            },
+            async resolve(parent, args){
+                const { email, password } = args
+                const { message, error, token } = await auth.login(email,password,process.env.SECRET_KEY_JWT_COURSE_API)
+                return {
+                    message,
+                    error,
+                    token
+                }
+            }
+        }
+    }
+})
 
 module.exports = new GraphQLSchema({
-    query: RootQuery
+    query: RootQuery,
+    mutation: Mutation
 })
